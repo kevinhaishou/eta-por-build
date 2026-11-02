@@ -82,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
+import io.github.mangi.eta.ui.app.LocalAppearanceSettings
 import io.github.mangi.eta.agent.browser.AgentBrowserSession
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.ui.app.AgentConversationRevisionReducer
@@ -1202,6 +1203,9 @@ private fun AgentChatBottomBar(
     onRefreshToolAccess: () -> Unit,
     onToggleTool: (ToolToggleItem, Boolean) -> Unit,
 ) {
+    val appearance = LocalAppearanceSettings.current
+    // 输入区底板与顶栏共用同一透明度：调到多透，壁纸就从这里透上来。
+    val barSurfaceAlpha = appearance.topBarAlpha.coerceIn(0.15f, 1f)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1210,7 +1214,7 @@ private fun AgentChatBottomBar(
         if (messageBackdrop != null) {
             val blurColors = BlurDefaults.blurColors(
                 blendColors = listOf(
-                    BlendColorEntry(MiuixTheme.colorScheme.surface.copy(alpha = 0.72f))
+                    BlendColorEntry(MiuixTheme.colorScheme.surface.copy(alpha = barSurfaceAlpha))
                 ),
             )
             Box(
@@ -1247,7 +1251,7 @@ private fun AgentChatBottomBar(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                MiuixTheme.colorScheme.surface,
+                                MiuixTheme.colorScheme.surface.copy(alpha = barSurfaceAlpha),
                             ),
                         )
                     ),
@@ -1256,7 +1260,7 @@ private fun AgentChatBottomBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MiuixTheme.colorScheme.surface)
+                .background(MiuixTheme.colorScheme.surface.copy(alpha = barSurfaceAlpha))
                 .navigationBarsPadding()
                 .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
         ) {
