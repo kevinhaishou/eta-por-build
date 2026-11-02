@@ -104,21 +104,30 @@ internal fun AgentWorkProcess(
     val bodyVisible = manualExpanded ?: (active && !assistantOverlay)
 
     val appearance = LocalAppearanceSettings.current
-    // 工作过程气泡可独立设色/透明度；未单独设色时回退到 AI 气泡色。
-    val workBubbleColor = (
-        when {
-            appearance.workProcessColor != 0L -> Color(appearance.workProcessColor)
-            appearance.bubbleAiColor != 0L -> Color(appearance.bubbleAiColor)
-            else -> MiuixTheme.colorScheme.surfaceContainerHigh
-        }
-        ).copy(alpha = appearance.workProcessAlpha)
-    // 整个「工作过程」块（标题 + 步骤时间线）统一套一层 AI 气泡。
+    // 工作过程默认「不上色」：思考/工具/终端属于过程信息，套一块和正文同量级的气泡
+    // 会把过程画成主角（整屏艳色块），只有用户在设置里主动选了颜色才套气泡。
+    val workBubbleColor: Color? = if (appearance.workProcessColor != 0L) {
+        Color(appearance.workProcessColor).copy(alpha = appearance.workProcessAlpha)
+    } else {
+        null
+    }
     Box(
         modifier = modifier
             .widthIn(max = with(LocalConfiguration.current) { (screenWidthDp * 0.75f).dp })
-            .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-            .background(workBubbleColor)
-            .padding(appearance.bubblePadding.dp),
+            .then(
+                if (workBubbleColor != null) {
+                    Modifier
+                        .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+                        .background(workBubbleColor)
+                        .padding(appearance.bubblePadding.dp)
+                } else {
+                    // 无气泡时回到原来的左右留白，和正文左缘对齐。
+                    Modifier.padding(
+                        horizontal = if (assistantOverlay) 12.dp else 16.dp,
+                        vertical = 2.dp,
+                    )
+                },
+            ),
     ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
