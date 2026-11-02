@@ -169,6 +169,8 @@ internal object SettingsDataStore {
     private val APPEARANCE_BUBBLE_PADDING = floatPreferencesKey("appearance_bubble_padding")
     private val APPEARANCE_BUBBLE_USER_ALPHA = floatPreferencesKey("appearance_bubble_user_alpha")
     private val APPEARANCE_BUBBLE_AI_ALPHA = floatPreferencesKey("appearance_bubble_ai_alpha")
+    private val APPEARANCE_WORK_PROCESS_COLOR = longPreferencesKey("appearance_work_process_color")
+    private val APPEARANCE_WORK_PROCESS_ALPHA = floatPreferencesKey("appearance_work_process_alpha")
     private const val SELECTED_MODEL_BY_PROVIDER_PREFIX = "selected_model_id_by_provider."
 
     private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = STORE_NAME)
@@ -521,6 +523,8 @@ internal object SettingsDataStore {
             bubblePadding = this[APPEARANCE_BUBBLE_PADDING] ?: 12f,
             bubbleUserAlpha = this[APPEARANCE_BUBBLE_USER_ALPHA] ?: 1f,
             bubbleAiAlpha = this[APPEARANCE_BUBBLE_AI_ALPHA] ?: 1f,
+            workProcessColor = this[APPEARANCE_WORK_PROCESS_COLOR] ?: 0L,
+            workProcessAlpha = this[APPEARANCE_WORK_PROCESS_ALPHA] ?: 1f,
         ).normalized(),
     )
 
@@ -553,5 +557,7 @@ internal object SettingsDataStore {
         this[APPEARANCE_BUBBLE_PADDING] = settings.bubblePadding
         this[APPEARANCE_BUBBLE_USER_ALPHA] = settings.bubbleUserAlpha
         this[APPEARANCE_BUBBLE_AI_ALPHA] = settings.bubbleAiAlpha
+        this[APPEARANCE_WORK_PROCESS_COLOR] = settings.workProcessColor
+        this[APPEARANCE_WORK_PROCESS_ALPHA] = settings.workProcessAlpha
     }
 }
