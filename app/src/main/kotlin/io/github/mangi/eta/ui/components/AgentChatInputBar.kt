@@ -88,6 +88,7 @@ import io.github.mangi.eta.agent.subagent.SubagentRunRegistry
 import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.sp
 import io.github.mangi.eta.R
+import io.github.mangi.eta.ui.app.LocalAppearanceSettings
 import io.github.mangi.eta.data.model.ReasoningEffort
 import androidx.compose.ui.platform.LocalContext
 import io.github.mangi.eta.ui.app.ChatDraftStore
@@ -195,6 +196,7 @@ internal fun AgentChatInputBar(
     onToggleTool: (ToolToggleItem, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val appearance = LocalAppearanceSettings.current
     val keyboard = LocalSoftwareKeyboardController.current
     val hapticFeedback = LocalHapticFeedback.current
     val focusRequester = remember { FocusRequester() }
@@ -499,13 +501,16 @@ internal fun AgentChatInputBar(
                         ),
                     )
                     .squircleSurface(
-                        color = MiuixTheme.colorScheme.surfaceContainer,
-                        cornerRadius = 20.dp,
+                        // 跟随「顶栏透明度」，与顶栏/侧边栏同一套视觉；圆角跟随气泡样式。
+                        color = MiuixTheme.colorScheme.surfaceContainer.copy(
+                            alpha = appearance.topBarAlpha.coerceIn(0.3f, 1f),
+                        ),
+                        cornerRadius = appearance.bubbleCornerRadius.dp,
                     )
                     .squircleBorder(
                         width = 0.5.dp,
                         color = MiuixTheme.colorScheme.outline.copy(alpha = 0.55f),
-                        cornerRadius = 20.dp,
+                        cornerRadius = appearance.bubbleCornerRadius.dp,
                     )
                     .padding(horizontal = 10.dp, vertical = 8.dp),
             ) {
