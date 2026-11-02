@@ -235,6 +235,14 @@ internal fun ChatMessageItem(
     } else {
         ""
     }
+    // AI 侧共用气泡底色（默认深灰），可被「编辑气泡样式」覆盖。
+    val aiBubbleColor = (
+        if (appearance.bubbleAiColor != 0L) {
+            Color(appearance.bubbleAiColor)
+        } else {
+            MiuixTheme.colorScheme.surfaceContainerHigh
+        }
+        ).copy(alpha = appearance.bubbleAiAlpha)
     // 双方气泡共用上限：约屏宽 75%，AI 长回复不再整行铺满。
     val maxBubbleWidth = with(LocalConfiguration.current) {
         (screenWidthDp * 0.75f).dp
@@ -281,13 +289,7 @@ internal fun ChatMessageItem(
             onSelectCandidate = { onSelectReplyCandidate(message.id, it) },
             onFork = onForkMessage?.let { callback -> { callback(message.id) } },
             // 气泡只包正文，操作图标行留在气泡外，避免被挤压、裁切。
-            bubbleColor = (
-                if (appearance.bubbleAiColor != 0L) {
-                    Color(appearance.bubbleAiColor)
-                } else {
-                    MiuixTheme.colorScheme.surfaceContainerHigh
-                }
-                ).copy(alpha = appearance.bubbleAiAlpha),
+            bubbleColor = aiBubbleColor,
             bubbleCornerRadius = appearance.bubbleCornerRadius.dp,
             bubblePadding = appearance.bubblePadding.dp,
             modifier = Modifier
@@ -332,24 +334,53 @@ internal fun ChatMessageItem(
                 messageActionsEnabled = messageActionsEnabled,
                 onDelete = { onDeleteMessage(message.id) },
                 onRegenerate = { onRegenerateMessage(message.id) },
+                bubbleColor = aiBubbleColor,
+                bubbleCornerRadius = appearance.bubbleCornerRadius.dp,
+                bubblePadding = appearance.bubblePadding.dp,
                 modifier = modifier,
             )
         }
-        is ThinkingMessageUi -> ThinkingRow(
-            message = message,
-            retainedStreamingState = retainedStreamingState,
-            modifier = modifier,
-            compact = compact,
-        )
-        is RunTraceMessageUi -> RunTraceRow(message = message, onClick = onRunTraceClick, modifier = modifier)
-        is ToolActivityMessageUi -> ToolActivityInline(
-            message = message,
-            onOpenBrowser = onOpenBrowser,
-            showBrowserShortcut = showBrowserShortcut,
-            modifier = modifier,
-            compact = compact,
-        )
-        is ToolSummaryMessageUi -> ToolSummaryInline(message = message, modifier = modifier, compact = compact)
+        is ThinkingMessageUi -> Box(
+            modifier = modifier
+                .widthIn(max = maxBubbleWidth)
+                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+                .background(aiBubbleColor)
+                .padding(appearance.bubblePadding.dp),
+        ) {
+            ThinkingRow(message = message, retainedStreamingState = retainedStreamingState, compact = compact)
+        }
+        is RunTraceMessageUi -> Box(
+            modifier = modifier
+                .widthIn(max = maxBubbleWidth)
+                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+                .background(aiBubbleColor)
+                .padding(appearance.bubblePadding.dp),
+        ) {
+            RunTraceRow(message = message, onClick = onRunTraceClick)
+        }
+        is ToolActivityMessageUi -> Box(
+            modifier = modifier
+                .widthIn(max = maxBubbleWidth)
+                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+                .background(aiBubbleColor)
+                .padding(appearance.bubblePadding.dp),
+        ) {
+            ToolActivityInline(
+                message = message,
+                onOpenBrowser = onOpenBrowser,
+                showBrowserShortcut = showBrowserShortcut,
+                compact = compact,
+            )
+        }
+        is ToolSummaryMessageUi -> Box(
+            modifier = modifier
+                .widthIn(max = maxBubbleWidth)
+                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+                .background(aiBubbleColor)
+                .padding(appearance.bubblePadding.dp),
+        ) {
+            ToolSummaryInline(message = message, compact = compact)
+        }
         is SuggestionChipsMessageUi -> SuggestionChipsRow(message = message, onSuggestionClick = onSuggestionClick, modifier = modifier)
     }
 }
@@ -678,7 +709,7 @@ private fun MessageTimestampLabel(
         // 空间被挤压时保持单行，避免逐字竖排（"09:11" 曾被压成竖列）。
         maxLines = 1,
         softWrap = false,
-        overflow = TextOverflow.Clip,
+        overflow = TextOverflow.Visible,
         modifier = modifier,
     )
 }
