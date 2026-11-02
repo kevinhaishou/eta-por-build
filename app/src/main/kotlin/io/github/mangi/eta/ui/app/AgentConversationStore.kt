@@ -1,0 +1,598 @@
+package io.github.mangi.eta.ui.app
+
+import android.content.Context
+import androidx.room.withTransaction
+import io.github.mangi.eta.agent.model.AgentConversationCodec
+import io.github.mangi.eta.agent.model.AgentModelClient
+import io.github.mangi.eta.agent.roleplay.RoleplayBinding
+import io.github.mangi.eta.agent.roleplay.RoleplayMessageState
+import io.github.mangi.eta.data.db.ConversationCategoryEntity
+import io.github.mangi.eta.data.db.ConversationContextCheckpointEntity
+import io.github.mangi.eta.data.db.ConversationDao
+import io.github.mangi.eta.data.db.ConversationBranchNodeRow
+import io.github.mangi.eta.data.db.ConversationEntity
+import io.github.mangi.eta.data.db.ConversationMetadata
+import io.github.mangi.eta.data.db.ConversationMessageEntity
+import io.github.mangi.eta.data.db.ConversationStateEntity
+import io.github.mangi.eta.data.db.EtaDatabase
+import io.github.mangi.eta.data.model.ReasoningEffort
+import io.github.mangi.eta.core.AndroidAgentLogger
+import io.github.mangi.eta.core.safeLogType
+import io.github.mangi.eta.core.safeStackTrace
+import io.github.mangi.eta.ui.model.AgentChatHomeUiState
+import io.github.mangi.eta.ui.model.AgentChatMessageUi
+import io.github.mangi.eta.ui.model.AgentMessageUi
+import io.github.mangi.eta.ui.model.ThinkingMessageUi
+import io.github.mangi.eta.ui.model.SystemNoticeCode
+import io.github.mangi.eta.ui.model.SystemNoticeMessageUi
+import io.github.mangi.eta.ui.model.TokenUsageUi
+import io.github.mangi.eta.ui.model.ToolActivityMessageUi
+import io.github.mangi.eta.ui.model.ToolActivityStatusUi
+import io.github.mangi.eta.ui.model.ToolSummaryMessageUi
+import io.github.mangi.eta.ui.model.UserMessageUi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.json.JSONArray
+
+internal object AgentConversationStore {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    data class Snapshot(
+        val selectedConversationId: String?,
+        val conversationsById: Map<String, AgentChatHomeUiState>,
+        val titles: Map<String, String>,
+        val updatedAt: Map<String, Long>,
+        /** 会话收藏置顶状态（id → pinned）。数据库为唯一真源，仅从加载路径填充。 */
+        val pinned: Map<String, Boolean> = emptyMap(),
+        /** 用户自建的会话分类；数据库为唯一真源，仅从加载路径填充。 */
+        val categories: List<ConversationCategoryEntity> = emptyList(),
+        /** 会话归属分类（id → categoryId）；未归属的会话不在表内。 */
+        val categoryIds: Map<String, String> = emptyMap(),
+        /**
+         * 列表下标与 sort_index 不一致，或加载时修复过外部历史的会话。流式占位会留下空洞，
+         * 重启后列表被压紧；增量保存按下标截断后缀，这些会话必须先整段重写一次。
+         */
+        val unalignedConversationIds: Set<String> = emptySet(),
+        /**
+         * 只有元数据、没把消息与上下文读进内存的会话。
+         * 保存路径必须跳过这些会话的 messages / checkpoint，否则内存里的空列表会覆盖库内历史。
+         */
+        val partiallyLoadedConversationIds: Set<String> = emptySet(),
+        /** 会话列表预览（库里最新一条消息的首块，≤256 字符）；占位会话靠它显示摘要。 */
+        val previews: Map<String, String> = emptyMap(),
+    )
+
+    private val saveMutex = Mutex()
+
+    fun load(context: Context): Snapshot =
+        runBlocking(Dispatchers.IO) {
+            loadSnapshot(context.applicationContext)
+        }
+
+    suspend fun save(
+        context: Context,
+        selectedConversationId: String?,
+        conversationsById: Map<String, AgentChatHomeUiState>,
+        titles: Map<String, String>,
+        updatedAt: Map<String, Long>,
+        categoryIds: Map<String, String>? = null,
+    ) = AgentConversationPersistence().save(
+        context, Snapshot(selectedConversationId, conversationsById, titles, updatedAt), categoryIds,
+    )
+
+    /** 收藏置顶写入：直写数据库单列，独立事务，与整段会话保存互不覆盖。 */
+    suspend fun setPinned(context: Context, conversationId: String, pinned: Boolean) {
+        withContext(Dispatchers.IO) {
+            EtaDatabase.get(context.applicationContext).conversationDao()
+                .setConversationPinned(conversationId, pinned)
+        }
+    }
+
+    /** 会话分类归属：直写数据库单列，独立事务，与整段会话保存互不覆盖。 */
+    suspend fun setCategory(context: Context, conversationId: String, categoryId: String?) {
+        withContext(Dispatchers.IO) {
+            EtaDatabase.get(context.applicationContext).conversationDao()
+                .setConversationCategory(conversationId, categoryId)
+        }
+    }
+
+    /** 新建或重命名分类。 */
+    suspend fun saveCategory(context: Context, category: ConversationCategoryEntity) {
+        withContext(Dispatchers.IO) {
+            EtaDatabase.get(context.applicationContext).conversationDao().upsertCategory(category)
+        }
+    }
+
+    /** 删除分类并解散其下会话归属，会话本身保留。 */
+    suspend fun removeCategory(context: Context, categoryId: String) {
+        withContext(Dispatchers.IO) {
+            val database = EtaDatabase.get(context.applicationContext)
+            database.withTransaction {
+                val dao = database.conversationDao()
+                dao.clearCategoryAssignments(categoryId)
+                dao.deleteCategory(categoryId)
+            }
+        }
+    }
+
+    internal suspend fun saveChanges(
+        context: Context,
+        selectedConversationId: String?,
+        current: Map<String, AgentConversationPersistence.Content>,
+        previous: Map<String, AgentConversationPersistence.Content>,
+        /** 只加载了元数据的会话：这里只写元数据，不碰 messages / checkpoint。 */
+        partiallyLoadedConversationIds: Set<String> = emptySet(),
+        /**
+         * 会话分类归属的权威映射（会话 id → 分类 id）。null 表示本次不参与归属（沿用库内值）。
+         *
+         * #002：归属必须跟着「会话行落库」一起写。旧实现是新建会话时立刻
+         * `UPDATE conversations SET category_id = ? WHERE id = ?`，可那一刻行还没插入，
+         * UPDATE 作用在 0 行上，接着持久化又把 null 写进这一列 —— 新会话就掉进未分类。
+         */
+        categoryIds: Map<String, String>? = null,
+    ) {
+        val appContext = context.applicationContext
+        saveMutex.withLock {
+            withContext(Dispatchers.IO) {
+                var phase = "read_metadata"
+                try {
+                    val database = EtaDatabase.get(appContext)
+                    val dao = database.conversationDao()
+                    database.withTransaction {
+                        val stored = dao.conversationMetadataRows().associateBy { it.id }
+                        phase = "delete_conversations"
+                        // 未加载的会话靠占位状态留在 current 里；真正被删掉的才会从 current 消失。
+                        (stored.keys - current.keys - partiallyLoadedConversationIds)
+                            .forEach { dao.deleteConversation(it) }
+                        for ((id, state) in current) {
+                            val old = previous[id].takeIf { id in stored }
+                            val isPlaceholder = id in partiallyLoadedConversationIds
+                            if (old == null || !state.sameMetadata(old)) {
+                                phase = "encode_metadata"
+                                val row = ConversationEntity(
+                                    id = id, title = state.title,
+                                    thinkingEnabled = state.reasoningEffort.enablesReasoning,
+                                    reasoningEffort = state.reasoningEffort.wireValue,
+                                    appliedRuntimeRunIdsJson = json.encodeToString(state.appliedRuntimeRunIds),
+                                    roleplayJson = state.roleplay?.let { json.encodeToString(it) }.orEmpty(),
+                                    revisionsJson = if (state.roleplay == null) "" else json.encodeToString(state.roleplayMessages),
+                                    lastModelUsageJson = state.lastModelUsage?.let { json.encodeToString(it) }.orEmpty(),
+                                    createdAt = stored[id]?.createdAt ?: state.updatedAt.takeIf { it != 0L } ?: System.currentTimeMillis(),
+                                    updatedAt = state.updatedAt.takeIf { it != 0L } ?: System.currentTimeMillis(),
+                                    modelId = state.modelId,
+                                    pinned = stored[id]?.pinned ?: false,
+                                    categoryId = if (categoryIds != null) categoryIds[id] else stored[id]?.categoryId,
+                                    // 分叉归属只在创建时由 setConversationBranch 写入，普通保存必须沿用库内值，
+                                    // 否则一次标题/历史变更就会把「从哪条消息分出」清空。
+                                    parentConversationId = stored[id]?.parentConversationId,
+                                    parentMessageId = stored[id]?.parentMessageId,
+                                    // 新会话（stored 里还没有）默认自己就是一棵树的根，与迁移回填口径一致。
+                                    branchRootId = stored[id]?.branchRootId ?: id,
+                                )
+                                phase = "write_metadata"
+                                dao.insertConversations(listOf(row))
+                            }
+                            // 占位会话的消息与上下文不在内存里，写回等于清空库内历史（#006）。
+                            if (isPlaceholder) continue
+                            if (old == null || state.history != old.history || state.journal != old.journal) {
+                                val missing = dao.contextCheckpointRow(id) == null
+                                phase = "encode_history"
+                                val history = if (missing || old == null || state.history != old.history) {
+                                    AgentConversationCodec.encodeConversationCheckpoint(state.history)
+                                } else null
+                                phase = "encode_journal"
+                                val journal = if (missing || old == null || state.journal != old.journal) {
+                                    AgentConversationCodec.encodeTranscriptForStorage(state.journal)
+                                } else null
+                                phase = "write_checkpoint"
+                                dao.updateContextCheckpoint(id, history, journal)
+                            }
+                            val oldMessages = old?.messages.orEmpty()
+                            var prefix = 0
+                            while (prefix < minOf(oldMessages.size, state.messages.size)) {
+                                val before = oldMessages[prefix]
+                                val after = state.messages[prefix]
+                                if (before != after && before.toEntityOrNull(id, prefix) != after.toEntityOrNull(id, prefix)) break
+                                prefix++
+                            }
+                            if (old == null || prefix != oldMessages.size || prefix != state.messages.size) {
+                                phase = "delete_message_suffix"
+                                dao.deleteMessagesFrom(id, prefix)
+                                for (index in prefix until state.messages.size) {
+                                    phase = "encode_message"
+                                    val row = state.messages[index].toEntityOrNull(id, index) ?: continue
+                                    phase = "write_message"
+                                    dao.insertMessages(listOf(row))
+                                }
+                            }
+                        }
+                        phase = "write_selection"
+                        val selected = selectedConversationId?.takeIf { it in current }
+                            ?: current.maxByOrNull { it.value.updatedAt }?.key
+                        if (selected == null) dao.deleteState()
+                        else dao.insertState(ConversationStateEntity(selectedConversationId = selected))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
+                    AndroidAgentLogger.error(
+                        "Agent conversation persistence failed: phase=$phase type=${failure.safeLogType()}\n${failure.safeStackTrace()}",
+                    )
+                    throw failure
+                }
+            }
+        }
+    }
+
+    /**
+     * 启动快照：只把**选中会话**的消息与上下文读进内存，其余会话留占位状态。
+     *
+     * #006：旧实现把 46 个会话的 19963 条消息与全部 checkpoint 一次性还原（实测 96M 字符，
+     * 常驻堆 192MB 并持续爬升），进程跑 40 分钟后任意一次大分配就 OOM。
+     * 占位会话在用户切过去时由 [loadConversation] 按需补齐。
+     */
+    private suspend fun loadSnapshot(context: Context): Snapshot {
+        val dao = EtaDatabase.get(context).conversationDao()
+        val conversations = dao.conversations()
+        if (conversations.isEmpty()) {
+            return Snapshot(
+                selectedConversationId = null,
+                conversationsById = emptyMap(),
+                titles = emptyMap(),
+                updatedAt = emptyMap(),
+            )
+        }
+
+        val selected = dao.state()?.selectedConversationId
+            ?.takeIf { id -> conversations.any { it.id == id } }
+            ?: conversations.first().id
+        // 空洞会话（流式占位留下的 sort_index 不连续）必须整段读：保存时才会整段重写修好。
+        val misalignedIds = runCatching { dao.misalignedConversationIds() }.getOrDefault(emptyList()).toSet()
+        val fullyLoadedIds = misalignedIds + selected
+
+        val states = linkedMapOf<String, AgentChatHomeUiState>()
+        val titles = mutableMapOf<String, String>()
+        val updatedAt = mutableMapOf<String, Long>()
+        val pinned = mutableMapOf<String, Boolean>()
+        val categoryIds = mutableMapOf<String, String>()
+        val unaligned = mutableSetOf<String>()
+        val partiallyLoaded = mutableSetOf<String>()
+        // 占位会话没有 messages，会话列表的预览改取库里最新一条消息的首块（≤256 字符）。
+        val previews = dao.conversationIndex()
+            .mapNotNull { row ->
+                row.messagePreview?.takeIf(String::isNotBlank)?.let { preview -> row.id to preview }
+            }
+            .toMap()
+
+        conversations.forEach { conversation ->
+            if (conversation.id in fullyLoadedIds) {
+                states[conversation.id] = buildLoadedState(dao, conversation, unaligned)
+            } else {
+                states[conversation.id] = buildPlaceholderState(conversation)
+                partiallyLoaded += conversation.id
+            }
+            titles[conversation.id] = conversation.title.takeUnless { it == LEGACY_UNNAMED_TITLE }.orEmpty()
+            updatedAt[conversation.id] = conversation.updatedAt
+            if (conversation.pinned) pinned[conversation.id] = true
+            conversation.categoryId?.let { cid -> categoryIds[conversation.id] = cid }
+        }
+
+        return Snapshot(
+            selectedConversationId = selected,
+            conversationsById = states,
+            titles = titles,
+            updatedAt = updatedAt,
+            pinned = pinned,
+            categories = dao.categories(),
+            categoryIds = categoryIds,
+            unalignedConversationIds = unaligned,
+            partiallyLoadedConversationIds = partiallyLoaded,
+            previews = previews,
+        )
+    }
+
+    /** 把一个会话的消息与上下文完整读进内存；口径与原启动加载完全一致。 */
+    suspend fun loadConversation(context: Context, conversationId: String): AgentChatHomeUiState? =
+        withContext(Dispatchers.IO) {
+            val dao = EtaDatabase.get(context.applicationContext).conversationDao()
+            val conversation = dao.conversation(conversationId) ?: return@withContext null
+            buildLoadedState(dao, conversation, mutableSetOf())
+        }
+
+    private suspend fun buildLoadedState(
+        dao: ConversationDao,
+        conversation: ConversationMetadata,
+        unaligned: MutableSet<String>,
+    ): AgentChatHomeUiState {
+        val messages = buildList {
+            var offset = 0
+            while (true) {
+                val page = dao.messagesPage(conversation.id, MESSAGE_LOAD_PAGE_SIZE, offset)
+                addAll(page)
+                if (page.size < MESSAGE_LOAD_PAGE_SIZE) break
+                offset += page.size
+            }
+        }
+        val restored = messages.mapNotNull { it.toMessageOrNull() }
+        if (restored.size != messages.size || messages.withIndex().any { (index, row) -> row.sortIndex != index }) {
+            unaligned += conversation.id
+        }
+        val checkpoint = dao.contextCheckpoint(conversation.id)
+        return AgentChatHomeUiState(
+            roleplay = conversation.roleplayJson.takeIf(String::isNotBlank)?.let { json.decodeFromString<RoleplayBinding>(it) },
+            roleplayMessages = conversation.revisionsJson.takeIf(String::isNotBlank)?.let {
+                json.decodeFromString<RoleplayMessageState>(it)
+            } ?: RoleplayMessageState(),
+            journal = AgentConversationCodec.decodeTranscript(checkpoint?.journalJson),
+            lastModelUsage = conversation.lastModelUsageJson.takeIf(String::isNotBlank)?.let {
+                runCatching { json.decodeFromString<TokenUsageUi>(it) }.getOrNull()
+            },
+            messages = restored,
+            history = AgentConversationCodec.decodeTranscript(checkpoint?.historyJson)
+                .ifEmpty {
+                    messages.toLegacyHistory()
+                },
+            appliedRuntimeRunIds = conversation.appliedRuntimeRunIdsJson.toStringList(),
+            input = "",
+            isStreaming = false,
+            thinkingEnabled = conversation.reasoningEffortValue.enablesReasoning,
+            reasoningEffort = conversation.reasoningEffortValue,
+            modelId = conversation.modelId,
+        ).let { original ->
+            ExternalConversationHistory.repair(conversation.id, original).also { repaired ->
+                if (repaired.history != original.history || repaired.journal != original.journal) unaligned += conversation.id
+            }
+        }.let(RoleplayConversationReducer::decorate)
+    }
+
+    /** 未加载会话的占位状态：只有元数据，messages / journal / history 为空，列表摘要靠 previews。 */
+    private fun buildPlaceholderState(conversation: ConversationMetadata) = AgentChatHomeUiState(
+        roleplay = conversation.roleplayJson.takeIf(String::isNotBlank)?.let { json.decodeFromString<RoleplayBinding>(it) },
+        roleplayMessages = conversation.revisionsJson.takeIf(String::isNotBlank)?.let {
+            json.decodeFromString<RoleplayMessageState>(it)
+        } ?: RoleplayMessageState(),
+        journal = emptyList(),
+        lastModelUsage = conversation.lastModelUsageJson.takeIf(String::isNotBlank)?.let {
+            runCatching { json.decodeFromString<TokenUsageUi>(it) }.getOrNull()
+        },
+        messages = emptyList(),
+        history = emptyList(),
+        appliedRuntimeRunIds = conversation.appliedRuntimeRunIdsJson.toStringList(),
+        input = "",
+        isStreaming = false,
+        thinkingEnabled = conversation.reasoningEffortValue.enablesReasoning,
+        reasoningEffort = conversation.reasoningEffortValue,
+        modelId = conversation.modelId,
+    )
+
+
+    private val ConversationMetadata.reasoningEffortValue: ReasoningEffort
+        get() = ReasoningEffort.fromWireValue(reasoningEffort) ?: ReasoningEffort.DEFAULT
+
+    private fun AgentChatMessageUi.toEntityOrNull(
+        conversationId: String,
+        sortIndex: Int,
+    ): ConversationMessageEntity? =
+        when (this) {
+            is UserMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_USER,
+                content = content,
+                imagesJson = images.toJsonArrayString(),
+                isEdited = isEdited,
+                createdAt = createdAt,
+            )
+
+            is AgentMessageUi -> {
+                if (content.isBlank() && isStreaming) {
+                    null
+                } else {
+                    ConversationMessageEntity(
+                        id = id,
+                        conversationId = conversationId,
+                        sortIndex = sortIndex,
+                        type = TYPE_ASSISTANT,
+                        content = content,
+                        renderMarkdown = renderMarkdown,
+                        contextTokens = usage?.contextTokens,
+                        inputTokens = usage?.inputTokens,
+                        outputTokens = usage?.outputTokens,
+                        reasoningTokens = usage?.reasoningTokens,
+                        cachedTokens = usage?.cachedTokens,
+                        requestDurationMs = usage?.requestDurationMs,
+                        createdAt = createdAt,
+                    )
+                }
+            }
+
+            is SystemNoticeMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_SYSTEM_NOTICE,
+                content = code.wireValue,
+                resultSummary = detail,
+                contextTokens = contextTokens,
+                renderMarkdown = false,
+            )
+
+            is ThinkingMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_THINKING,
+                content = content,
+                elapsedSeconds = elapsedSeconds,
+            )
+
+            is ToolActivityMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_TOOL,
+                content = command.orEmpty(),
+                toolName = toolName,
+                toolStatus = status.name,
+                argumentsSummary = argumentsSummary,
+                resultSummary = resultSummary,
+                imageCount = imageCount,
+            )
+
+            is ToolSummaryMessageUi -> ConversationMessageEntity(
+                id = id,
+                conversationId = conversationId,
+                sortIndex = sortIndex,
+                type = TYPE_TOOL_SUMMARY,
+                content = "",
+                toolsJson = tools.toJsonArrayString(),
+            )
+
+            else -> null
+        }
+
+    private fun ConversationMessageEntity.toMessageOrNull(): AgentChatMessageUi? =
+        when (type) {
+            TYPE_USER -> UserMessageUi(
+                id = id,
+                content = content,
+                images = imagesJson.toStringList(),
+                isEdited = isEdited,
+                createdAt = createdAt,
+            )
+
+            TYPE_ASSISTANT -> AgentMessageUi(
+                id = id,
+                content = content,
+                isStreaming = false,
+                renderMarkdown = renderMarkdown ?: true,
+                usage = TokenUsageUi(
+                    contextTokens = contextTokens,
+                    inputTokens = inputTokens,
+                    outputTokens = outputTokens,
+                    reasoningTokens = reasoningTokens,
+                    cachedTokens = cachedTokens,
+                    requestDurationMs = requestDurationMs,
+                ).takeUnless { it.isEmpty },
+                createdAt = createdAt,
+            )
+
+            TYPE_SYSTEM_NOTICE -> SystemNoticeCode.fromWireValue(content)?.let { code ->
+                SystemNoticeMessageUi(
+                    id = id,
+                    code = code,
+                    detail = resultSummary,
+                    contextTokens = contextTokens,
+                )
+            }
+
+            TYPE_THINKING -> ThinkingMessageUi(
+                id = id,
+                content = content,
+                isStreaming = false,
+                elapsedSeconds = elapsedSeconds,
+                collapsed = true,
+            )
+
+            TYPE_TOOL -> ToolActivityMessageUi(
+                id = id,
+                toolName = toolName.orEmpty(),
+                status = toolStatus.orEmpty().toToolStatus(),
+                argumentsSummary = argumentsSummary.orEmpty(),
+                command = content.takeIf(String::isNotBlank),
+                resultSummary = resultSummary,
+                imageCount = imageCount,
+            )
+
+            TYPE_TOOL_SUMMARY -> ToolSummaryMessageUi(
+                id = id,
+                tools = toolsJson.toStringList(),
+            )
+
+            else -> null
+        }
+
+    private fun String.toToolStatus(): ToolActivityStatusUi =
+        runCatching { ToolActivityStatusUi.valueOf(this) }.getOrNull()
+            ?.let { status ->
+                if (status == ToolActivityStatusUi.Running) ToolActivityStatusUi.Unknown else status
+            }
+            ?: ToolActivityStatusUi.Unknown
+
+    private fun List<String>.toJsonArrayString(): String =
+        JSONArray().also { array ->
+            forEach { array.put(it) }
+        }.toString()
+
+    private fun String.toStringList(): List<String> =
+        runCatching {
+            val array = JSONArray(this)
+            buildList {
+                for (index in 0 until array.length()) {
+                    array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+        }.getOrDefault(emptyList())
+
+    private fun List<ConversationMessageEntity>.toLegacyHistory(): List<AgentModelClient.ConversationMessage> =
+        mapNotNull { message ->
+            when (message.type) {
+                TYPE_USER -> AgentModelClient.ConversationMessage(
+                    role = "user",
+                    content = message.content,
+                )
+                TYPE_ASSISTANT -> message.content
+                    .takeIf { it.isNotBlank() }
+                    ?.let { content ->
+                        AgentModelClient.ConversationMessage(
+                            role = "assistant",
+                            content = content,
+                        )
+                    }
+                else -> null
+            }
+        }
+
+    /**
+     * 分支归属落库：会话行已经写完（persist 落地）之后调用。
+     * 树根取父会话的 `branch_root_id`，父会话若是老数据（null）就退回父会话自身 id。
+     */
+    suspend fun attachBranch(
+        context: Context,
+        childConversationId: String,
+        parentConversationId: String,
+        parentMessageId: String,
+    ): String = withContext(Dispatchers.IO) {
+        val dao = EtaDatabase.get(context.applicationContext).conversationDao()
+        val root = dao.branchRootOf(parentConversationId)?.takeIf(String::isNotBlank) ?: parentConversationId
+        dao.setConversationBranch(childConversationId, parentConversationId, parentMessageId, root)
+        root
+    }
+
+    /** 分支画布：一次取出当前会话所在的整棵树，不递归。 */
+    suspend fun branchNodes(context: Context, conversationId: String): List<ConversationBranchNodeRow> =
+        withContext(Dispatchers.IO) {
+            val dao = EtaDatabase.get(context.applicationContext).conversationDao()
+            val root = dao.branchRootOf(conversationId)?.takeIf(String::isNotBlank) ?: conversationId
+            dao.conversationBranchNodes(root)
+        }
+
+    private const val TYPE_USER = "user"
+    private const val TYPE_ASSISTANT = "assistant"
+    private const val TYPE_SYSTEM_NOTICE = "system_notice"
+    private const val TYPE_THINKING = "thinking"
+    private const val TYPE_TOOL = "tool"
+    private const val TYPE_TOOL_SUMMARY = "tool_summary"
+    private const val MESSAGE_LOAD_PAGE_SIZE = 128
+    private const val LEGACY_UNNAMED_TITLE = "新对话"
+}
