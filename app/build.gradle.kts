@@ -1,0 +1,214 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+}
+
+val releaseStoreFile = System.getenv("ETA_RELEASE_STORE_FILE")
+val releaseStorePassword = System.getenv("ETA_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ETA_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ETA_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+// CI 对非发版构建传入提交号，按 SemVer 构建元数据追加为 +<sha>，不影响版本先后；本地与发版构建不传
+val buildMetadata = providers.gradleProperty("eta.buildMetadata").orNull?.takeIf { it.isNotBlank() }
+require(buildMetadata == null || buildMetadata.matches(Regex("[0-9A-Za-z.-]+"))) {
+    "eta.buildMetadata 只能包含字母、数字、点和连字符"
+}
+val buildMetadataSuffix = buildMetadata?.let { "+$it" }.orEmpty()
+
+android {
+    namespace = "io.github.mangi.eta"
+    compileSdk = 37
+    ndkVersion = libs.versions.ndk.get()
+    buildToolsVersion = "37.0.0"
+
+    defaultConfig {
+        applicationId = "io.github.mangi.eta.por"
+        minSdk = 33
+        targetSdk = 37
+        // versionCode 规则：yyyyMMdd + 两位当日序号（01 起），发版时随 versionName 一起手动递增。
+        // 跨零点必须换成当天日期、序号归 01，不能接着前一天的号往下加——
+        // 之前从 2026102020 起就一直在沿用 10-20 的日期，日期不再反映实际构建日。
+        versionCode = 2026103121
+        versionName = "3.3.4"
+        testInstrumentationRunner = "io.github.mangi.eta.validation.DeviceValidationRunner"
+
+        ndk {
+            // 同时过滤本地与依赖 AAR 的原生库，确保 APK 仅包含 ARM64。
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                // 三种方案一起签：v1 给老工具/非 Android 校验器认，v2 是 Android 7+ 的主校验，
+                // v3 是 Android 9+ 的换钥与降级保护。只签 v3 时，部分 root 模块、MT 管理器、
+                // 第三方安装器会报「未签名」或校验失败。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // 版本名带构建类型标记，设置页与 APK 文件名据此区分 Debug 包
+            versionNameSuffix = "-debug" + buildMetadataSuffix
+            isMinifyEnabled = false
+            isPseudoLocalesEnabled = true
+        }
+        release {
+            versionNameSuffix = buildMetadataSuffix
+            signingConfig = signingConfigs.findByName("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_25
+        targetCompatibility = JavaVersion.VERSION_25
+    }
+
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
+
+    androidResources {
+        localeFilters += listOf("b+zh+Hans")
+    }
+
+    packaging {
+        // 不压缩 dex：上游 3.3.4 开启 useLegacyPackaging 后，APK 小约 4 MB，
+        // 但安装时必须解压并生成完整 vdex（实测多占 8.5 MB），本机长期使用得不偿失。
+        // 只在需要对外分发小包时临时打开。
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so")
+        }
+        resources {
+            // 合并 Xposed 模块声明，避免 release 裁剪后模块入口失效
+            merges += "META-INF/xposed/*"
+            // 仅排除会引发打包冲突的签名/版本元数据，避免误伤 Compose 资源
+            excludes += "META-INF/*.kotlin_module"
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/io.netty.versions.properties"
+        }
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = false
+        // versionCode 采用日期编码，已发布值只能递增；上限 2100000000 足够覆盖到 2099 年。
+        disable += "HighAppVersionCode"
+    }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric 在高版本 JDK 下需要访问内部 API，参数只作用于测试 JVM。
+        unitTests.all {
+            it.jvmArgs(
+                "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                "--add-opens=java.base/java.util=ALL-UNNAMED",
+                "--add-opens=java.base/java.io=ALL-UNNAMED",
+                "--add-opens=java.base/java.net=ALL-UNNAMED",
+                "--add-opens=java.base/java.security=ALL-UNNAMED",
+                "--add-opens=java.base/java.text=ALL-UNNAMED",
+                "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+                "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+                "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                "--enable-native-access=ALL-UNNAMED",
+            )
+        }
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        // 文件名只取 versionName：构建类型标记与 CI 构建元数据都由 versionNameSuffix 带出
+        variant.outputs.forEach { output ->
+            output.outputFileName.set(output.versionName.map { "Eta-v$it.apk" })
+        }
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
+    implementation(libs.jsoup)
+    implementation(libs.commons.compress)
+    implementation(libs.xz)
+    compileOnly(libs.libxposed.api)
+    // UI 侧 RemotePreferences 写入桥：通过 XposedService 将配置提交到 LSPosed 数据库；
+    // Hook 侧用 XposedInterface.getRemotePreferences 读取当前进程持有的配置缓存。
+    implementation(libs.libxposed.service)
+    implementation(libs.dexkit)
+    implementation(libs.miuix.ui)
+    implementation(libs.miuix.icons)
+    implementation(libs.miuix.blur)
+    implementation(libs.miuix.nav)
+    implementation(libs.miuix.preference)
+    implementation(libs.material.icons.extended)
+    implementation(libs.androidx.navigationevent)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.activity.compose)
+    // 只使用 GFM 解析器；聊天渲染层由 ui/markdown 自建，按块冻结并接入逐字显现。
+    implementation(libs.intellij.markdown)
+    implementation(libs.hidden.api.bypass)
+
+    // DataStore：Provider / Model 结构化 JSON 与当前选中 ID 等键值
+    implementation(libs.datastore.preferences)
+
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
+
+    // OkHttp：替代 HttpURLConnection，支持 SSE
+    implementation(libs.okhttp)
+    implementation(libs.nimbus.jose.jwt)
+    implementation(libs.okhttp.sse)
+
+    // Kotlinx Serialization：Provider 设置与运行时配置 JSON
+    implementation(libs.kotlinx.serialization.json)
+
+    // Coroutines：显式引入，避免依赖传递版本不确定
+    implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.json)
+    testImplementation(libs.room.testing)
+    testImplementation(libs.robolectric)
+}
+
+// Compose 编译器会额外生成「Compose 映射报告」任务：只产出报告，不影响 APK 内容，
+// 但在本机 PRoot 环境里偶发静默卡死（进程无声消失、日志停在那一行）。直接关掉。
+tasks.configureEach {
+    if (name.endsWith("ComposeMappingErrors") || name.endsWith("ComposeMapping")) {
+        enabled = false
+    }
+}
