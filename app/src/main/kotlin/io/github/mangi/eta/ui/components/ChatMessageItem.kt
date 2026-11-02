@@ -340,47 +340,21 @@ internal fun ChatMessageItem(
                 modifier = modifier,
             )
         }
-        is ThinkingMessageUi -> Box(
-            modifier = modifier
-                .widthIn(max = maxBubbleWidth)
-                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                .background(aiBubbleColor)
-                .padding(appearance.bubblePadding.dp),
-        ) {
-            ThinkingRow(message = message, retainedStreamingState = retainedStreamingState, compact = compact)
-        }
-        is RunTraceMessageUi -> Box(
-            modifier = modifier
-                .widthIn(max = maxBubbleWidth)
-                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                .background(aiBubbleColor)
-                .padding(appearance.bubblePadding.dp),
-        ) {
-            RunTraceRow(message = message, onClick = onRunTraceClick)
-        }
-        is ToolActivityMessageUi -> Box(
-            modifier = modifier
-                .widthIn(max = maxBubbleWidth)
-                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                .background(aiBubbleColor)
-                .padding(appearance.bubblePadding.dp),
-        ) {
-            ToolActivityInline(
-                message = message,
-                onOpenBrowser = onOpenBrowser,
-                showBrowserShortcut = showBrowserShortcut,
-                compact = compact,
-            )
-        }
-        is ToolSummaryMessageUi -> Box(
-            modifier = modifier
-                .widthIn(max = maxBubbleWidth)
-                .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                .background(aiBubbleColor)
-                .padding(appearance.bubblePadding.dp),
-        ) {
-            ToolSummaryInline(message = message, compact = compact)
-        }
+        is ThinkingMessageUi -> ThinkingRow(
+            message = message,
+            retainedStreamingState = retainedStreamingState,
+            modifier = modifier,
+            compact = compact,
+        )
+        is RunTraceMessageUi -> RunTraceRow(message = message, onClick = onRunTraceClick, modifier = modifier)
+        is ToolActivityMessageUi -> ToolActivityInline(
+            message = message,
+            onOpenBrowser = onOpenBrowser,
+            showBrowserShortcut = showBrowserShortcut,
+            modifier = modifier,
+            compact = compact,
+        )
+        is ToolSummaryMessageUi -> ToolSummaryInline(message = message, modifier = modifier, compact = compact)
         is SuggestionChipsMessageUi -> SuggestionChipsRow(message = message, onSuggestionClick = onSuggestionClick, modifier = modifier)
     }
 }
