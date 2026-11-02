@@ -104,30 +104,27 @@ internal fun AgentWorkProcess(
     val bodyVisible = manualExpanded ?: (active && !assistantOverlay)
 
     val appearance = LocalAppearanceSettings.current
-    // 工作过程默认「不上色」：思考/工具/终端属于过程信息，套一块和正文同量级的气泡
-    // 会把过程画成主角（整屏艳色块），只有用户在设置里主动选了颜色才套气泡。
-    val workBubbleColor: Color? = if (appearance.workProcessColor != 0L) {
-        Color(appearance.workProcessColor).copy(alpha = appearance.workProcessAlpha)
-    } else {
-        null
-    }
+    // 工作过程默认用中性灰底，绝不跟随正文气泡的强调色：过程信息套一块艳色会喧宾夺主。
+    // 只有用户在「编辑气泡样式」里单独给工作过程选了颜色，才换成自定义色。
+    val workBubbleColor = (
+        if (appearance.workProcessColor != 0L) {
+            Color(appearance.workProcessColor)
+        } else {
+            MiuixTheme.colorScheme.surfaceContainerHigh
+        }
+        ).copy(alpha = appearance.workProcessAlpha)
     Box(
         modifier = modifier
-            .widthIn(max = with(LocalConfiguration.current) { (screenWidthDp * 0.75f).dp })
-            .then(
-                if (workBubbleColor != null) {
-                    Modifier
-                        .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                        .background(workBubbleColor)
-                        .padding(appearance.bubblePadding.dp)
-                } else {
-                    // 无气泡时回到原来的左右留白，和正文左缘对齐。
-                    Modifier.padding(
-                        horizontal = if (assistantOverlay) 12.dp else 16.dp,
-                        vertical = 2.dp,
-                    )
-                },
-            ),
+            // 工作过程是整行的过程记录，不能像正文气泡那样限宽：压成 3/4 会缩在左边、右侧留大片空，看着就是错位。
+            .fillMaxWidth()
+            // 外边距和正文气泡对齐（原来这层留白在，套气泡时不能丢），否则会贴住屏幕左缘。
+            .padding(
+                horizontal = if (assistantOverlay) 12.dp else 16.dp,
+                vertical = 2.dp,
+            )
+            .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+            .background(workBubbleColor)
+            .padding(appearance.bubblePadding.dp),
     ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
