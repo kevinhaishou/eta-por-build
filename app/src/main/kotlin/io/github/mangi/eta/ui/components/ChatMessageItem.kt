@@ -280,24 +280,19 @@ internal fun ChatMessageItem(
             onEdit = { onEditMessage(message.id) },
             onSelectCandidate = { onSelectReplyCandidate(message.id, it) },
             onFork = onForkMessage?.let { callback -> { callback(message.id) } },
+            // 气泡只包正文，操作图标行留在气泡外，避免被挤压、裁切。
+            bubbleColor = (
+                if (appearance.bubbleAiColor != 0L) {
+                    Color(appearance.bubbleAiColor)
+                } else {
+                    MiuixTheme.colorScheme.surfaceContainerHigh
+                }
+                ).copy(alpha = appearance.bubbleAiAlpha),
+            bubbleCornerRadius = appearance.bubbleCornerRadius.dp,
+            bubblePadding = appearance.bubblePadding.dp,
             modifier = Modifier
                 .widthIn(max = maxBubbleWidth)
-                .weight(1f, fill = false)
-                .then(
-                    // AI 气泡始终有底色（默认深灰），贴近微信的对话观感。
-                    Modifier
-                        .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
-                        .background(
-                            (
-                                if (appearance.bubbleAiColor != 0L) {
-                                    Color(appearance.bubbleAiColor)
-                                } else {
-                                    MiuixTheme.colorScheme.surfaceContainerHigh
-                                }
-                                ).copy(alpha = appearance.bubbleAiAlpha),
-                        )
-                        .padding(appearance.bubblePadding.dp),
-                ),
+                .weight(1f, fill = false),
             )
         }
         is SystemNoticeMessageUi -> if (
@@ -782,6 +777,10 @@ private fun AgentMessageBlock(
     message: AgentMessageUi,
     allowSpeech: Boolean = false,
     assistantOverlay: Boolean = false,
+    /** 非空时给「正文」套气泡；操作行始终留在气泡外。 */
+    bubbleColor: Color? = null,
+    bubbleCornerRadius: Dp = 6.dp,
+    bubblePadding: Dp = 8.dp,
     retainedStreamingState: StreamingMarkdownState?,
     showCopyAction: Boolean,
     showMessageActions: Boolean,
@@ -839,6 +838,17 @@ private fun AgentMessageBlock(
         if (character != null) {
             CharacterReplyHeader(character = character, isGreeting = isGreeting)
         }
+        Box(
+            modifier = if (bubbleColor != null) {
+                Modifier
+                    .clip(RoundedCornerShape(bubbleCornerRadius))
+                    .background(bubbleColor)
+                    .padding(bubblePadding)
+            } else {
+                Modifier
+            },
+        ) {
+        Column {
         when {
             message.content.isBlank() && message.isStreaming -> {
                 AITypingIndicator(
@@ -885,6 +895,8 @@ private fun AgentMessageBlock(
         }
         message.searchSuggestionsHtml.forEach { html ->
             SearchSuggestionsView(html = html, modifier = Modifier.padding(top = 8.dp))
+        }
+        }
         }
 
         // 回答显现完成后才出现操作行；淡入展开避免贴底滚动时整页突然跳动一行高度。
