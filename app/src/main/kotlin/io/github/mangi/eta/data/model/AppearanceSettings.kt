@@ -54,6 +54,10 @@ data class AppearanceSettings(
     val bubbleUserAlpha: Float = 1f,
     /** AI 气泡不透明度。 */
     val bubbleAiAlpha: Float = 1f,
+    /** 工作过程（工具调用/终端执行）气泡底色 ARGB；0 表示跟随 AI 气泡。 */
+    val workProcessColor: Long = 0L,
+    /** 工作过程气泡不透明度。 */
+    val workProcessAlpha: Float = 1f,
 ) {
     fun normalized(): AppearanceSettings = copy(
         interfaceScale = normalizeInterfaceScale(interfaceScale),
@@ -63,6 +67,7 @@ data class AppearanceSettings(
         conversationPaneAlpha = conversationPaneAlpha.coerceIn(0.2f, 1f),
         bubbleUserAlpha = bubbleUserAlpha.coerceIn(0.2f, 1f),
         bubbleAiAlpha = bubbleAiAlpha.coerceIn(0.2f, 1f),
+        workProcessAlpha = workProcessAlpha.coerceIn(0.1f, 1f),
     )
 }
 
