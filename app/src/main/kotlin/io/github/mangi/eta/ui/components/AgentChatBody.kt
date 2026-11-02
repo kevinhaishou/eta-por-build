@@ -69,6 +69,7 @@ import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1497,13 +1498,19 @@ private fun SuggestionCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 原来用 surface 作底，深色主题下是一块纯黑，压在壁纸上像黑洞。
+    // 改成与首页其它卡片一致的半透明容器色：浅色 0.86、深色 0.72，既压得住壁纸又不死黑。
+    val lightScheme = MiuixTheme.colorScheme.background.luminance() > 0.5f
+    val cardColor = MiuixTheme.colorScheme.surfaceContainer.copy(
+        alpha = if (lightScheme) 0.86f else 0.72f,
+    )
     Column(
         modifier = modifier
-            .squircleSurface(color = MiuixTheme.colorScheme.surface, cornerRadius = 16.dp)
+            .squircleSurface(color = cardColor, cornerRadius = 20.dp)
             .squircleBorder(
                 width = 0.5.dp,
-                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.5f),
-                cornerRadius = 16.dp,
+                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.35f),
+                cornerRadius = 20.dp,
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 14.dp),
