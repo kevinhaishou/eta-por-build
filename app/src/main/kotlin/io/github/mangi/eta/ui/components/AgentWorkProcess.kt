@@ -27,6 +27,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalConfiguration
+import io.github.mangi.eta.ui.app.LocalAppearanceSettings
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -100,10 +103,24 @@ internal fun AgentWorkProcess(
     // 条目插入落在同一帧，不经 LaunchedEffect 晚一帧收起。语音浮层空间有限，自动模式不展开。
     val bodyVisible = manualExpanded ?: (active && !assistantOverlay)
 
-    Column(
+    val appearance = LocalAppearanceSettings.current
+    val workBubbleColor = (
+        if (appearance.bubbleAiColor != 0L) {
+            Color(appearance.bubbleAiColor)
+        } else {
+            MiuixTheme.colorScheme.surfaceContainerHigh
+        }
+        ).copy(alpha = appearance.bubbleAiAlpha)
+    // 整个「工作过程」块（标题 + 步骤时间线）统一套一层 AI 气泡。
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = if (assistantOverlay) 12.dp else 16.dp, vertical = 2.dp),
+            .widthIn(max = with(LocalConfiguration.current) { (screenWidthDp * 0.75f).dp })
+            .clip(RoundedCornerShape(appearance.bubbleCornerRadius.dp))
+            .background(workBubbleColor)
+            .padding(appearance.bubblePadding.dp),
+    ) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
     ) {
         AgentWorkHeader(
             messages = messages,
@@ -140,6 +157,7 @@ internal fun AgentWorkProcess(
                 }
             }
         }
+    }
     }
 }
 
