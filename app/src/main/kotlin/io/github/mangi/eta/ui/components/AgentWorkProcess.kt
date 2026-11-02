@@ -104,13 +104,14 @@ internal fun AgentWorkProcess(
     val bodyVisible = manualExpanded ?: (active && !assistantOverlay)
 
     val appearance = LocalAppearanceSettings.current
+    // 工作过程气泡可独立设色/透明度；未单独设色时回退到 AI 气泡色。
     val workBubbleColor = (
-        if (appearance.bubbleAiColor != 0L) {
-            Color(appearance.bubbleAiColor)
-        } else {
-            MiuixTheme.colorScheme.surfaceContainerHigh
+        when {
+            appearance.workProcessColor != 0L -> Color(appearance.workProcessColor)
+            appearance.bubbleAiColor != 0L -> Color(appearance.bubbleAiColor)
+            else -> MiuixTheme.colorScheme.surfaceContainerHigh
         }
-        ).copy(alpha = appearance.bubbleAiAlpha)
+        ).copy(alpha = appearance.workProcessAlpha)
     // 整个「工作过程」块（标题 + 步骤时间线）统一套一层 AI 气泡。
     Box(
         modifier = modifier
