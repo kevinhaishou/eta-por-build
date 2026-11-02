@@ -99,6 +99,9 @@ internal fun AppearanceSettingsScreen(onBack: () -> Unit) {
     var bubbleAiAlphaDraft by remember(appearance.bubbleAiAlpha) {
         mutableFloatStateOf(appearance.bubbleAiAlpha)
     }
+    var workAlphaDraft by remember(appearance.workProcessAlpha) {
+        mutableFloatStateOf(appearance.workProcessAlpha)
+    }
     var blurDraft by remember(appearance.wallpaperBlur) { mutableFloatStateOf(appearance.wallpaperBlur) }
     val blurSupported = isRuntimeShaderSupported()
 
@@ -703,6 +706,46 @@ internal fun AppearanceSettingsScreen(onBack: () -> Unit) {
                 valueRange = 0.2f..1f,
                 onValueChangeFinished = {
                     update { it.copy(bubbleAiAlpha = bubbleAiAlphaDraft) }
+                },
+            )
+            Text("工作过程气泡颜色", style = MiuixTheme.textStyles.body2)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 8.dp),
+            ) {
+                bubbleColorChoices.forEach { (argb, _) ->
+                    val selected = appearance.workProcessColor == argb
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (argb == 0L) MiuixTheme.colorScheme.surfaceContainerHigh else Color(argb),
+                            )
+                            .border(
+                                width = if (selected) 2.dp else 1.dp,
+                                color = if (selected) {
+                                    MiuixTheme.colorScheme.primary
+                                } else {
+                                    MiuixTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                                },
+                                shape = CircleShape,
+                            )
+                            .clickable { update { it.copy(workProcessColor = argb) } },
+                    )
+                }
+            }
+            Text(
+                "工作过程不透明度 ${(workAlphaDraft * 100f).roundToInt()}%",
+                style = MiuixTheme.textStyles.body2,
+            )
+            Slider(
+                value = workAlphaDraft.coerceIn(0.1f, 1f),
+                onValueChange = { workAlphaDraft = it },
+                modifier = Modifier.fillMaxWidth(),
+                valueRange = 0.1f..1f,
+                onValueChangeFinished = {
+                    update { it.copy(workProcessAlpha = workAlphaDraft) }
                 },
             )
             MiuixDialogActions(
