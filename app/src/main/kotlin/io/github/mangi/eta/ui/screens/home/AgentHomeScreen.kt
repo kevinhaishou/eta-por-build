@@ -1,10 +1,6 @@
 package io.github.mangi.eta.ui.screens.home
 
 import androidx.compose.runtime.Composable
-import io.github.mangi.eta.ui.model.ConversationSummaryUi
-import io.github.mangi.eta.ui.model.AgentContextUsageUi
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
@@ -44,14 +40,9 @@ internal fun AgentHomeScreen(
     toolAccess: ToolAccessUiState = ToolAccessUiState(),
     onRefreshToolAccess: () -> Unit = {},
     isDrawerOpen: Boolean = false,
-    /** 首页空状态展示的最近对话。 */
-    recentConversations: List<ConversationSummaryUi> = emptyList(),
-    onOpenConversation: (String) -> Unit = {},
-    onOpenAllConversations: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     key(chatConversationCompositionKey(conversationKey)) {
-        Box(modifier = modifier.fillMaxSize()) {
         CompositionLocalProvider(LocalRoleplayChat provides state.roleplayChatUi()) {
         AgentChatBody(
             messages = state.messages,
@@ -128,24 +119,8 @@ internal fun AgentHomeScreen(
             onRunTraceClick = { onAction(AgentHomeAction.ExpandRunTrace) },
             onOpenBrowser = { onAction(AgentHomeAction.OpenBrowser) },
             isDrawerOpen = isDrawerOpen,
-            modifier = Modifier.fillMaxSize(),
+            modifier = modifier,
         )
-        }
-        // 空会话时在聊天舞台之上叠一层欢迎面板；一旦有消息就自动让位。
-        // 有「上次运行被中断，可继续」卡片时让位，避免两层内容叠在一起穿字。
-        if (state.messages.isEmpty() && !state.isStreaming && state.resumableRun == null) {
-            HomeWelcomePanel(
-                modelLabel = modelPickerState.selectedModel?.displayName ?: "未选择模型",
-                providerLabel = modelPickerState.selectedModel?.providerName.orEmpty(),
-                contextUsage = AgentContextUsageUi(
-                    contextTokens = null,
-                    contextWindow = modelPickerState.selectedModel?.contextWindow,
-                ),
-                conversations = recentConversations,
-                onOpenConversation = onOpenConversation,
-                onOpenAllConversations = onOpenAllConversations,
-            )
-        }
         }
     }
 }
