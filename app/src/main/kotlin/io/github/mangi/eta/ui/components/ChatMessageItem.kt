@@ -680,6 +680,10 @@ private fun MessageTimestampLabel(
         text = label,
         style = MiuixTheme.textStyles.body2,
         color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.75f),
+        // 空间被挤压时保持单行，避免逐字竖排（"09:11" 曾被压成竖列）。
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
         modifier = modifier,
     )
 }
