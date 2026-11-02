@@ -132,7 +132,8 @@ internal fun AgentHomeScreen(
         )
         }
         // 空会话时在聊天舞台之上叠一层欢迎面板；一旦有消息就自动让位。
-        if (state.messages.isEmpty() && !state.isStreaming) {
+        // 有「上次运行被中断，可继续」卡片时让位，避免两层内容叠在一起穿字。
+        if (state.messages.isEmpty() && !state.isStreaming && state.resumableRun == null) {
             HomeWelcomePanel(
                 modelLabel = modelPickerState.selectedModel?.displayName ?: "未选择模型",
                 providerLabel = modelPickerState.selectedModel?.providerName.orEmpty(),
