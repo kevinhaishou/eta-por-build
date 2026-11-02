@@ -503,7 +503,7 @@ internal fun AgentChatInputBar(
                     .squircleSurface(
                         // 跟随「顶栏透明度」，与顶栏/侧边栏同一套视觉；圆角跟随气泡样式。
                         color = MiuixTheme.colorScheme.surfaceContainer.copy(
-                            alpha = appearance.topBarAlpha.coerceIn(0.3f, 1f),
+                            alpha = appearance.topBarAlpha.coerceIn(0.15f, 1f),
                         ),
                         cornerRadius = appearance.bubbleCornerRadius.dp,
                     )
