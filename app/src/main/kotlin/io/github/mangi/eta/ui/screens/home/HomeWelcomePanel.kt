@@ -20,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,14 +54,17 @@ internal fun HomeWelcomePanel(
         hour < 18 -> "下午好"
         else -> "晚上好"
     }
-    // 卡片跟随壁纸：半透明底，壁纸透上来才有参考图那种通透感。
-    val cardColor = MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)
+    // 卡片底要压得住壁纸，正文才清晰：浅色 0.86、深色 0.72。
+    val lightScheme = MiuixTheme.colorScheme.background.luminance() > 0.5f
+    val cardColor = MiuixTheme.colorScheme.surfaceContainer.copy(
+        alpha = if (lightScheme) 0.86f else 0.72f,
+    )
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 18.dp, vertical = 8.dp),
     ) {
         Text(
             text = greeting,
